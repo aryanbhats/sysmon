@@ -147,35 +147,77 @@ def status():
 
     console.print(Panel(cat_table, title="Resource Usage by Category", border_style="cyan"))
 
-    # ── AI Agent detail ──
+    # ── AI Agent detail (with workspace context + grouping) ──
     ai_procs = categories.get("ai_agent", {}).get("procs", [])
     conductor_procs = categories.get("conductor", {}).get("procs", [])
     all_ai = sorted(ai_procs + conductor_procs, key=lambda p: p["rss"], reverse=True)
 
     if all_ai:
-        ai_table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
-        ai_table.add_column("Process", min_width=25)
-        ai_table.add_column("PID", justify="right")
-        ai_table.add_column("Memory", justify="right")
-        ai_table.add_column("CPU %", justify="right")
+        # Group small processes (>3 with same name, all <5 MB) into summary lines
+        SMALL_THRESHOLD = 5_000_000
+        GROUP_MIN_COUNT = 3
 
-        total_ai_rss = 0
-        total_ai_cpu = 0.0
+        name_groups: dict[str, list] = {}
         for proc in all_ai:
-            ai_table.add_row(
+            name_groups.setdefault(proc["name"], []).append(proc)
+
+        display_rows = []  # (name, pid_str, rss, cpu, context)
+        grouped_names = set()
+
+        for name, procs in name_groups.items():
+            if len(procs) >= GROUP_MIN_COUNT and all(p["rss"] < SMALL_THRESHOLD for p in procs):
+                total_rss = sum(p["rss"] for p in procs)
+                total_cpu = sum(p["cpu_percent"] for p in procs)
+                display_rows.append((
+                    f"{name} (x{len(procs)})",
+                    "-",
+                    total_rss,
+                    total_cpu,
+                    "background",
+                ))
+                grouped_names.add(name)
+
+        for proc in all_ai:
+            if proc["name"] in grouped_names:
+                continue
+            ctx = proc.get("context") or ""
+            display_rows.append((
                 proc["name"],
                 str(proc["pid"]),
-                _fmt_bytes(proc["rss"]),
-                f"{proc['cpu_percent']:.1f}%",
+                proc["rss"],
+                proc["cpu_percent"],
+                ctx,
+            ))
+
+        # Sort: individual processes by RSS desc, grouped at bottom
+        display_rows.sort(key=lambda r: (r[1] == "-", -r[2]))
+
+        ai_table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+        ai_table.add_column("Process", min_width=18)
+        ai_table.add_column("PID", justify="right", min_width=6)
+        ai_table.add_column("Memory", justify="right", min_width=9)
+        ai_table.add_column("CPU %", justify="right", min_width=6)
+        ai_table.add_column("Workspace", min_width=20)
+
+        total_ai_rss = sum(r[2] for r in display_rows)
+        total_ai_cpu = sum(r[3] for r in display_rows)
+
+        for name, pid_str, rss, cpu, ctx in display_rows:
+            ctx_display = ctx if ctx else ""
+            ai_table.add_row(
+                name,
+                pid_str,
+                _fmt_bytes(rss),
+                f"{cpu:.1f}%",
+                Text(ctx_display, style="dim"),
             )
-            total_ai_rss += proc["rss"]
-            total_ai_cpu += proc["cpu_percent"]
 
         ai_table.add_row(
             Text("TOTAL", style="bold"),
             str(len(all_ai)),
             Text(_fmt_bytes(total_ai_rss), style="bold"),
             Text(f"{total_ai_cpu:.1f}%", style="bold"),
+            "",
         )
 
         console.print(Panel(ai_table, title="AI Agents", border_style="magenta"))
@@ -404,6 +446,111 @@ def collect():
     db.prune()
     db.close()
     click.echo(f"Snapshot #{snapshot_id} collected")
+
+
+@cli.command()
+@click.option("--json-output", "use_json", is_flag=True, help="Output as JSON for piping")
+def analyze(use_json: bool):
+    """Output structured system analysis for Claude or other AI tools.
+
+    Run this inside a Claude Code session and Claude can interpret the output.
+    Use --json-output for machine-readable JSON.
+    """
+    import json as json_mod
+
+    snap = collect_live_snapshot()
+
+    if use_json:
+        # Clean output for JSON serialization
+        click.echo(json_mod.dumps(snap, indent=2, default=str))
+        return
+
+    # Structured plain-text output designed for AI consumption
+    ts = snap["ts"][:19].replace("T", " ")
+    mem_pct = snap["mem_percent"]
+    swap_pct = (snap["swap_used"] / snap["swap_total"] * 100) if snap["swap_total"] > 0 else 0
+    uptime_secs = snap.get("uptime_seconds", 0)
+    uptime_days = uptime_secs // 86400
+    uptime_hours = (uptime_secs % 86400) // 3600
+
+    lines = []
+    lines.append(f"# System Analysis — {ts}")
+    lines.append("")
+    lines.append("## Health Summary")
+    lines.append(f"- Memory Pressure: {snap['mem_pressure'].upper()}")
+    lines.append(f"- RAM: {_fmt_bytes(snap['mem_used'])} / {_fmt_bytes(snap['mem_total'])} ({mem_pct:.1f}%)")
+    lines.append(f"- Swap: {_fmt_bytes(snap['swap_used'])} / {_fmt_bytes(snap['swap_total'])} ({swap_pct:.1f}%)")
+    lines.append(f"- CPU: {snap['cpu_percent']:.1f}% (Load: {snap['load_1']:.1f} / {snap['load_5']:.1f} / {snap['load_15']:.1f})")
+    lines.append(f"- Uptime: {uptime_days} days, {uptime_hours} hours")
+    lines.append("")
+
+    # Categorize
+    categories: dict[str, dict] = {}
+    for proc in snap["processes"]:
+        cat = proc["category"]
+        if cat not in categories:
+            categories[cat] = {"count": 0, "total_rss": 0, "total_cpu": 0.0, "procs": []}
+        categories[cat]["count"] += 1
+        categories[cat]["total_rss"] += proc["rss"]
+        categories[cat]["total_cpu"] += proc["cpu_percent"]
+        categories[cat]["procs"].append(proc)
+
+    # AI workload detail
+    ai_procs = categories.get("ai_agent", {}).get("procs", [])
+    conductor_procs = categories.get("conductor", {}).get("procs", [])
+    all_ai = sorted(ai_procs + conductor_procs, key=lambda p: p["rss"], reverse=True)
+
+    if all_ai:
+        total_ai_rss = sum(p["rss"] for p in all_ai)
+        lines.append(f"## AI Workload ({_fmt_bytes(total_ai_rss)} total, {len(all_ai)} processes)")
+        lines.append("")
+        lines.append("| Process | PID | Memory | CPU | Workspace |")
+        lines.append("|---------|-----|--------|-----|-----------|")
+
+        # Group small processes
+        name_groups: dict[str, list] = {}
+        for proc in all_ai:
+            name_groups.setdefault(proc["name"], []).append(proc)
+
+        grouped_names = set()
+        grouped_rows = []
+        for name, procs in name_groups.items():
+            if len(procs) >= 3 and all(p["rss"] < 5_000_000 for p in procs):
+                total = sum(p["rss"] for p in procs)
+                grouped_rows.append(f"| {name} (x{len(procs)}) | - | {_fmt_bytes(total)} | 0.0% | background |")
+                grouped_names.add(name)
+
+        for proc in all_ai:
+            if proc["name"] in grouped_names:
+                continue
+            ctx = proc.get("context") or ""
+            lines.append(f"| {proc['name']} | {proc['pid']} | {_fmt_bytes(proc['rss'])} | {proc['cpu_percent']:.1f}% | {ctx} |")
+
+        lines.extend(grouped_rows)
+        lines.append("")
+
+    # Memory by category
+    lines.append("## Memory by Category")
+    lines.append("")
+    lines.append("| Category | Memory | Processes |")
+    lines.append("|----------|--------|-----------|")
+    for cat, data in sorted(categories.items(), key=lambda x: x[1]["total_rss"], reverse=True):
+        label = CATEGORY_LABELS.get(cat, cat)
+        lines.append(f"| {label} | {_fmt_bytes(data['total_rss'])} | {data['count']} |")
+    lines.append("")
+
+    # Top consumers
+    top_procs = sorted(snap["processes"], key=lambda p: p["rss"], reverse=True)[:10]
+    lines.append("## Top Consumers (by memory)")
+    lines.append("")
+    lines.append("| Process | Category | Memory | Workspace |")
+    lines.append("|---------|----------|--------|-----------|")
+    for proc in top_procs:
+        cat_label = CATEGORY_LABELS.get(proc["category"], proc["category"])
+        ctx = proc.get("context") or ""
+        lines.append(f"| {proc['name']} | {cat_label} | {_fmt_bytes(proc['rss'])} | {ctx} |")
+
+    click.echo("\n".join(lines))
 
 
 @cli.command()

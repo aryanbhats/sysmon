@@ -7,6 +7,7 @@ import pytest
 
 from sysmon.collector import (
     _hash_cmdline,
+    _get_process_context,
     get_memory_pressure,
 )
 
@@ -31,6 +32,53 @@ class TestHashCmdline:
         h1 = _hash_cmdline(["python3", "a.py"])
         h2 = _hash_cmdline(["python3", "b.py"])
         assert h1 != h2
+
+
+class TestProcessContext:
+    @patch("sysmon.collector.psutil.Process")
+    def test_conductor_workspace(self, mock_proc_cls):
+        mock_proc_cls.return_value.cwd.return_value = (
+            "/Users/aryan/conductor/workspaces/the-ab-index/rome"
+        )
+        result = _get_process_context(1234, "ai_agent")
+        assert result == "the-ab-index/rome"
+
+    @patch("sysmon.collector.psutil.Process")
+    def test_regular_repo(self, mock_proc_cls):
+        mock_proc_cls.return_value.cwd.return_value = (
+            "/Users/aryan/Documents/0DevProjects/sysmon"
+        )
+        result = _get_process_context(1234, "ai_agent")
+        assert result == "sysmon"
+
+    @patch("sysmon.collector.psutil.Process")
+    def test_root_cwd_returns_background(self, mock_proc_cls):
+        mock_proc_cls.return_value.cwd.return_value = "/"
+        result = _get_process_context(1234, "ai_agent")
+        assert result == "background"
+
+    def test_non_ai_returns_none(self):
+        result = _get_process_context(1234, "browser")
+        assert result is None
+
+    def test_other_category_returns_none(self):
+        result = _get_process_context(1234, "other")
+        assert result is None
+
+    @patch("sysmon.collector.psutil.Process")
+    def test_access_denied_returns_none(self, mock_proc_cls):
+        import psutil
+        mock_proc_cls.return_value.cwd.side_effect = psutil.AccessDenied(1234)
+        result = _get_process_context(1234, "ai_agent")
+        assert result is None
+
+    @patch("sysmon.collector.psutil.Process")
+    def test_conductor_category(self, mock_proc_cls):
+        mock_proc_cls.return_value.cwd.return_value = (
+            "/Users/aryan/conductor/workspaces/project/workspace-name"
+        )
+        result = _get_process_context(1234, "conductor")
+        assert result == "project/workspace-name"
 
 
 class TestMemoryPressure:

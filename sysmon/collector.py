@@ -60,7 +60,10 @@ def collect_snapshot(db: Database) -> int:
 
 
 def collect_live_snapshot() -> dict:
-    """Collect a snapshot for live display (not stored to DB)."""
+    """Collect a snapshot for live display (not stored to DB).
+
+    Includes process context (workspace/repo) for AI agents.
+    """
     cpu_pct = psutil.cpu_percent(interval=0.5)
     cpu_per_core = psutil.cpu_percent(interval=None, percpu=True)
 
@@ -71,6 +74,14 @@ def collect_live_snapshot() -> dict:
     load_1, load_5, load_15 = psutil.getloadavg()
 
     processes = _collect_processes()
+
+    # Enrich with workspace context for live display
+    for proc in processes:
+        proc["context"] = _get_process_context(proc["pid"], proc["category"])
+
+    # Uptime
+    boot_time = psutil.boot_time()
+    uptime_secs = (datetime.now() - datetime.fromtimestamp(boot_time)).total_seconds()
 
     return {
         "ts": datetime.now().isoformat(),
@@ -88,6 +99,7 @@ def collect_live_snapshot() -> dict:
         "load_15": load_15,
         "disk_used": disk.used,
         "disk_free": disk.free,
+        "uptime_seconds": int(uptime_secs),
         "processes": processes,
     }
 
@@ -201,6 +213,42 @@ def _get_footprint(pid: int) -> int:
         return footprint
     except (OSError, ValueError):
         return 0
+
+
+def _get_process_context(pid: int, category: str) -> str | None:
+    """Get human-readable workspace/repo context for a process via cwd.
+
+    Only meaningful for AI agents and conductor processes.
+    Returns None for other categories or on failure.
+    """
+    if category not in ("ai_agent", "conductor"):
+        return None
+
+    try:
+        cwd = psutil.Process(pid).cwd()
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+        return None
+
+    if not cwd or cwd == "/":
+        return "background"
+
+    parts = cwd.rstrip("/").split("/")
+
+    # Conductor workspaces: .../conductor/workspaces/<project>/<workspace>
+    if "workspaces" in parts:
+        ws_idx = parts.index("workspaces")
+        remainder = parts[ws_idx + 1 :]
+        if remainder:
+            return "/".join(remainder)
+
+    # General case: last meaningful path component
+    # Filter out generic dirs like "Documents", "home", username
+    generic = {"Documents", "home", "Users", ""}
+    meaningful = [p for p in parts if p not in generic]
+    if meaningful:
+        return meaningful[-1]
+
+    return parts[-1] if parts else None
 
 
 def _hash_cmdline(cmdline: list[str] | None) -> str | None:
