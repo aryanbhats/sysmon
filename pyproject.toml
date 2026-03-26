@@ -1,0 +1,23 @@
+[project]
+name = "sysmon"
+version = "0.1.0"
+description = "Lightweight macOS system resource monitor with AI-workload-aware process grouping"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=6.0.0",
+    "rich>=13.0.0",
+    "click>=8.1.0",
+]
+
+[project.scripts]
+sysmon = "sysmon.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
