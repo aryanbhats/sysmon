@@ -80,6 +80,21 @@ class TestProcessContext:
         result = _get_process_context(1234, "conductor")
         assert result == "project/workspace-name"
 
+    def test_browser_headless_detected(self):
+        cmdline = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                   "--headless", "--no-startup-window", "--remote-debugging-port=0"]
+        result = _get_process_context(1234, "browser", cmdline)
+        assert result == "headless (automation)"
+
+    def test_browser_normal_returns_none(self):
+        cmdline = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+        result = _get_process_context(1234, "browser", cmdline)
+        assert result is None
+
+    def test_browser_no_cmdline_returns_none(self):
+        result = _get_process_context(1234, "browser", None)
+        assert result is None
+
 
 class TestMemoryPressure:
     @patch("sysmon.collector.subprocess.run")

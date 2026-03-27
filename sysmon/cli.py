@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -73,10 +74,27 @@ def cli():
 
 
 @cli.command()
-def status():
+@click.option("--watch", "watch_interval", type=int, default=None,
+              help="Refresh every N seconds (minimum 5)")
+def status(watch_interval):
     """Show current system status with AI-workload grouping."""
-    snap = collect_live_snapshot()
+    if watch_interval is not None:
+        watch_interval = max(watch_interval, 5)
+        try:
+            while True:
+                snap = collect_live_snapshot()
+                console.clear()
+                _print_status(snap)
+                time.sleep(watch_interval)
+        except KeyboardInterrupt:
+            return
+    else:
+        snap = collect_live_snapshot()
+        _print_status(snap)
 
+
+def _print_status(snap: dict) -> None:
+    """Print the status panels for a snapshot."""
     # ── System gauges ──
     mem_pct = snap["mem_percent"]
     swap_pct = (snap["swap_used"] / snap["swap_total"] * 100) if snap["swap_total"] > 0 else 0
@@ -256,6 +274,20 @@ def _get_recommendations(snap: dict, categories: dict) -> list[str]:
                 recs.append(f"Reboot recommended — {uptime_days} days uptime, swap at {swap_pct:.0f}%")
         except (OSError, ValueError):
             pass
+
+    # Detect headless browser automation
+    headless_rss = 0
+    headless_pids = []
+    for proc in snap.get("processes", []):
+        if proc.get("context") == "headless (automation)":
+            headless_rss += proc["rss"]
+            headless_pids.append(str(proc["pid"]))
+    if headless_rss > 500_000_000:
+        pid_hint = headless_pids[0] if len(headless_pids) == 1 else f"{len(headless_pids)} PIDs"
+        recs.append(
+            f"Headless Chrome (automation) using {_fmt_bytes(headless_rss)} — "
+            f"stop with 'kill {pid_hint}' if not using /browse"
+        )
 
     docker_rss = categories.get("docker", {}).get("total_rss", 0)
     if pressure == "critical" and docker_rss > 500_000_000:

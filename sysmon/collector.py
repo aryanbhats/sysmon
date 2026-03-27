@@ -73,11 +73,14 @@ def collect_live_snapshot() -> dict:
     disk = psutil.disk_usage("/")
     load_1, load_5, load_15 = psutil.getloadavg()
 
-    processes = _collect_processes()
+    processes = _collect_processes(include_cmdline=True)
 
     # Enrich with workspace context for live display
     for proc in processes:
-        proc["context"] = _get_process_context(proc["pid"], proc["category"])
+        proc["context"] = _get_process_context(
+            proc["pid"], proc["category"], proc.get("_cmdline")
+        )
+        proc.pop("_cmdline", None)  # don't leak raw cmdline in output
 
     # Uptime
     boot_time = psutil.boot_time()
@@ -104,8 +107,13 @@ def collect_live_snapshot() -> dict:
     }
 
 
-def _collect_processes() -> list[dict]:
-    """Scan all processes, categorize, and filter."""
+def _collect_processes(include_cmdline: bool = False) -> list[dict]:
+    """Scan all processes, categorize, and filter.
+
+    Args:
+        include_cmdline: If True, include raw cmdline for live context enrichment.
+                        Should be False for DB storage (privacy).
+    """
     processes = []
     for proc in psutil.process_iter(
         ["pid", "name", "cpu_percent", "memory_info", "cmdline", "create_time"]
@@ -127,18 +135,21 @@ def _collect_processes() -> list[dict]:
 
             footprint = _get_footprint(info["pid"])
 
-            processes.append(
-                {
-                    "pid": info["pid"],
-                    "name": display_name(info["name"], info.get("cmdline")),
-                    "create_time": info.get("create_time"),
-                    "cpu_percent": info.get("cpu_percent") or 0.0,
-                    "rss": mem_info.rss,
-                    "memory_footprint": footprint,
-                    "category": category,
-                    "cmdline_hash": _hash_cmdline(info.get("cmdline")),
-                }
-            )
+            proc_data = {
+                "pid": info["pid"],
+                "name": display_name(info["name"], info.get("cmdline")),
+                "create_time": info.get("create_time"),
+                "cpu_percent": info.get("cpu_percent") or 0.0,
+                "rss": mem_info.rss,
+                "memory_footprint": footprint,
+                "category": category,
+                "cmdline_hash": _hash_cmdline(info.get("cmdline")),
+            }
+
+            if include_cmdline:
+                proc_data["_cmdline"] = info.get("cmdline")
+
+            processes.append(proc_data)
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
 
@@ -215,12 +226,20 @@ def _get_footprint(pid: int) -> int:
         return 0
 
 
-def _get_process_context(pid: int, category: str) -> str | None:
-    """Get human-readable workspace/repo context for a process via cwd.
+def _get_process_context(pid: int, category: str, cmdline: list[str] | None = None) -> str | None:
+    """Get human-readable context for a process.
 
-    Only meaningful for AI agents and conductor processes.
+    For AI agents/conductor: workspace/repo via cwd.
+    For browsers: detects headless automation.
     Returns None for other categories or on failure.
     """
+    # Detect headless browser automation
+    if category == "browser" and cmdline:
+        cmdline_str = " ".join(cmdline)
+        if "--headless" in cmdline_str or "--no-startup-window" in cmdline_str:
+            return "headless (automation)"
+        return None
+
     if category not in ("ai_agent", "conductor"):
         return None
 
