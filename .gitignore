@@ -28,3 +28,6 @@ htmlcov/
 
 # sysmon data (local to each machine)
 *.db
+
+# Codex session state
+.context/
