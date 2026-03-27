@@ -31,3 +31,6 @@ htmlcov/
 
 # Codex session state
 .context/
+
+# Claude Code local state
+.claude/
