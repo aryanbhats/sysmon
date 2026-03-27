@@ -134,6 +134,18 @@ sysmon groups processes so you can see where memory is actually going:
 | **System** | WindowServer, kernel_task, mds, launchd, etc. |
 | **Other** | Everything else (filtered to >10 MB) |
 
+## Claude Code skill
+
+sysmon includes a Claude Code skill that teaches Claude when and how to use sysmon automatically. Once installed, just say "my mac is slow" or "what's eating my RAM" — Claude will run the right command and interpret the results without you needing to remember the syntax.
+
+```bash
+# Install via symlink (stays updated with git pulls)
+mkdir -p ~/.claude/skills
+ln -sf "$(pwd)/skill" ~/.claude/skills/sysmon
+```
+
+See [GUIDE.md](GUIDE.md) for more details on using sysmon with AI coding agents.
+
 ## Architecture
 
 ```
@@ -142,6 +154,8 @@ sysmon/
 ├── collector.py     # psutil data collection + macOS-specific APIs
 ├── categories.py    # Process categorization rules
 └── db.py            # SQLite with WAL mode, migrations, rollup
+skill/
+└── SKILL.md         # Claude Code skill for automatic sysmon integration
 ```
 
 **Data flow:** `launchd` runs `sysmon collect` every 60s. The collector uses [psutil](https://github.com/giampaolo/psutil) for CPU/memory/swap/process data, parses macOS `memory_pressure` for pressure level, and uses `proc_pid_rusage` via ctypes for true memory footprint. Data goes to SQLite in WAL mode for safe concurrent reads.
