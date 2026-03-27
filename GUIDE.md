@@ -29,10 +29,35 @@ The `!` prefix runs a shell command in your session. Claude sees the structured 
 **Other commands you can run in Claude:**
 
 ```
-! sysmon status           # Visual gauges and color-coded panels
-! sysmon analyze --json-output   # Raw JSON if you want Claude to process specific fields
-! sysmon report --hours 4  # What happened over the last 4 hours
+! sysmon status                  # Visual gauges and color-coded panels
+! sysmon analyze --json-output   # Raw JSON — Claude can parse specific fields
+! sysmon report --hours 4        # What happened over the last 4 hours
 ```
+
+## Three levels of detail
+
+sysmon gives you different levels of detail depending on what you need:
+
+### `sysmon status` — the overview
+
+Shows gauges and category totals. AI agents are broken out individually with workspace names. Everything else (browsers, editors, etc.) is grouped by category. Use this for a quick "am I OK?" check.
+
+### `sysmon analyze` — the breakdown
+
+Shows everything `status` shows, plus:
+- **Top Consumers table** — the 10 biggest individual processes across ALL categories. This is where you'll see specific apps like Spotify (322 MB), WhatsApp (198 MB), iTerm2 (263 MB) that are hidden inside "Other: 3.5 GB" in the status view.
+- Structured markdown that Claude can read and interpret in-session.
+
+Use this when you want to know "what's actually inside that 3.5 GB of Other?"
+
+### `sysmon analyze --json-output` — the raw data
+
+Dumps every process, every metric as JSON. Use this when you want Claude to answer specific questions like:
+- "Which processes are using more than 200 MB?"
+- "How much total memory is Spotify using across all its processes?"
+- "What's running in the-ab-index workspace?"
+
+Run `! sysmon analyze --json-output` and then ask your question — Claude will parse the JSON directly.
 
 ## Understanding the Workspace column
 
