@@ -149,6 +149,26 @@ When you need to free memory by stopping AI agents:
 4. Verify before killing: `ps -p <PID> -o pid,command`
 5. Stop it cleanly: `kill <PID>`
 
+## Claude Code skill (optional)
+
+sysmon includes a Claude Code skill that teaches Claude when and how to use sysmon commands automatically. When installed, Claude will reach for sysmon when you mention system performance, slowness, or memory — without you needing to remember the commands.
+
+**Install via symlink** (stays updated with git pulls):
+
+```bash
+mkdir -p ~/.claude/skills
+ln -sf "$(pwd)/skill" ~/.claude/skills/sysmon
+```
+
+**Or copy manually:**
+
+```bash
+mkdir -p ~/.claude/skills/sysmon
+cp skill/SKILL.md ~/.claude/skills/sysmon/SKILL.md
+```
+
+After installing, start a new Claude Code session. Try saying "my mac is slow" or "what's eating my RAM" — Claude will automatically run the right sysmon command and interpret the results.
+
 ## Privacy
 
 **What sysmon stores** (in `~/.local/share/sysmon/sysmon.db`):
